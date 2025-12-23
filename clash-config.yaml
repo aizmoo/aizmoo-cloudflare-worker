@@ -1,0 +1,41 @@
+mixed-port: 7890
+allow-lan: false
+bind-address: '*'
+mode: rule
+log-level: info
+ipv6: false
+
+proxies:
+  - name: "github-actions-xray"
+    type: vless
+    server: "YOUR_TUNNEL_HOST"  # 替换为 Cloudflare Tunnel 提供的主机名（例如：xxxx.trycloudflare.com）
+    port: YOUR_TUNNEL_PORT  # 替换为 Cloudflare Tunnel 提供的端口号
+    uuid: "e4e6cef9-8308-44ff-9783-16441309096d"
+    network: tcp
+    tls: true
+    flow: xtls-rprx-vision
+    servername: "www.microsoft.com"
+    reality-opts:
+      public-key: "1RzwoQHWmTFRpP8IQdaPenvUHgDsHOemoREffDHJGEA"  # 与服务器 private-key 配对的公钥
+      short-id: ""
+    client-fingerprint: chrome
+
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies:
+      - "github-actions-xray"
+
+rules:
+  # Claude 相关域名优先走代理
+  - DOMAIN-SUFFIX,claude.com,PROXY
+  - DOMAIN-SUFFIX,claude.ai,PROXY
+  - DOMAIN-SUFFIX,anthropic.com,PROXY
+  - DOMAIN-SUFFIX,cdn.claude.ai,PROXY
+  
+  # 中国大陆 IP 直连
+  - GEOIP,CN,DIRECT
+  
+  # 其他流量走代理
+  - MATCH,PROXY
+

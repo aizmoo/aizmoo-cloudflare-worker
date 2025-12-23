@@ -24,6 +24,15 @@ jobs:
           chmod +x xray
           ./xray version
 
+      - name: Install Cloudflared
+        run: |
+          echo "Installing Cloudflared (Cloudflare Tunnel)..."
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cloudflared
+          chmod +x cloudflared
+          sudo mv cloudflared /usr/local/bin/
+          cloudflared --version
+          echo "✅ Cloudflared installed (no token required)"
+
       - name: Create Xray config
         run: |
           cat > config.json << 'EOF'
@@ -99,7 +108,26 @@ jobs:
           echo "Network: tcp"
           echo "Security: reality"
           echo "SNI: www.microsoft.com"
-          echo "================================"
+          echo ""
+          if [ -n "$TUNNEL_URL" ]; then
+            echo "================================"
+            echo "Cloudflare Tunnel Public Access:"
+            echo "================================"
+            echo "Public URL: $TUNNEL_URL"
+            echo "Host: $TUNNEL_HOST"
+            echo "Port: $TUNNEL_PORT"
+            echo "================================"
+            echo "Connection Details:"
+            echo "================================"
+            echo "Server: $TUNNEL_HOST"
+            echo "Port: $TUNNEL_PORT"
+            echo "UUID: e4e6cef9-8308-44ff-9783-16441309096d"
+            echo "Flow: xtls-rprx-vision"
+            echo "Network: tcp"
+            echo "Security: reality"
+            echo "SNI: www.microsoft.com"
+            echo "================================"
+          fi
 
       - name: Start Xray
         run: |
@@ -126,6 +154,52 @@ jobs:
             echo "⚠️  Port 10186 might not be accessible"
           fi
 
+      - name: Start Cloudflare Tunnel
+        run: |
+          echo "Starting Cloudflare Tunnel..."
+          # Start cloudflared TCP tunnel in background and capture output
+          cloudflared tunnel --url tcp://localhost:10186 > tunnel.log 2>&1 &
+          TUNNEL_PID=$!
+          echo "Cloudflared started with PID: $TUNNEL_PID"
+          
+          # Wait for tunnel to establish
+          echo "Waiting for tunnel to establish..."
+          sleep 10
+          
+          # Extract tunnel URL from logs
+          # Cloudflared outputs to stderr, format: tcp://xxxx.trycloudflare.com:xxxxx
+          TUNNEL_URL=$(grep -oE 'tcp://[a-z0-9-]+\.trycloudflare\.com:[0-9]+' tunnel.log 2>/dev/null | head -1)
+          
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "⚠️  Trying to extract URL from log again..."
+            sleep 3
+            # Try different patterns
+            TUNNEL_URL=$(tail -30 tunnel.log | grep -oE 'tcp://[^ ]+' | head -1 || echo "")
+          fi
+          
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "⚠️  Checking full tunnel log..."
+            cat tunnel.log
+            # Last attempt - look for any URL pattern
+            TUNNEL_URL=$(grep -iE '(tcp://|trycloudflare)' tunnel.log | grep -oE 'tcp://[^ ]+' | head -1 || echo "")
+          fi
+          
+          if [ -n "$TUNNEL_URL" ]; then
+            echo "✅ Cloudflare Tunnel established"
+            echo "Public URL: $TUNNEL_URL"
+            # Extract host and port from tunnel URL (format: tcp://xxxx.trycloudflare.com:12345)
+            TUNNEL_HOST=$(echo $TUNNEL_URL | sed 's|tcp://||' | cut -d: -f1)
+            TUNNEL_PORT=$(echo $TUNNEL_URL | sed 's|tcp://||' | cut -d: -f2)
+            echo "TUNNEL_HOST=$TUNNEL_HOST" >> $GITHUB_ENV
+            echo "TUNNEL_PORT=$TUNNEL_PORT" >> $GITHUB_ENV
+            echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
+          else
+            echo "❌ Failed to get Cloudflare Tunnel URL"
+            echo "Tunnel log:"
+            cat tunnel.log || true
+            exit 1
+          fi
+
       - name: Keep Alive
         run: |
           DURATION=${{ github.event.inputs.duration }}
@@ -134,12 +208,31 @@ jobs:
           fi
           
           echo "Keeping proxy alive for $DURATION minutes..."
-          echo "You can connect to the proxy at:"
-          PUBLIC_IP=$(curl -4 -s https://api.ipify.org)
-          echo "  Server: $PUBLIC_IP"
-          echo "  Port: 10186"
+          echo ""
+          echo "================================"
+          echo "Connection Information:"
+          echo "================================"
+          if [ -n "$TUNNEL_URL" ]; then
+            echo "🌐 Public Access via Cloudflare Tunnel:"
+            echo "  Server: $TUNNEL_HOST"
+            echo "  Port: $TUNNEL_PORT"
+            echo "  Full URL: $TUNNEL_URL"
+          else
+            echo "⚠️  Tunnel URL not available"
+            PUBLIC_IP=$(curl -4 -s https://api.ipify.org)
+            echo "  Server: $PUBLIC_IP"
+            echo "  Port: 10186"
+          fi
+          echo ""
+          echo "Xray Configuration:"
+          echo "  UUID: e4e6cef9-8308-44ff-9783-16441309096d"
+          echo "  Flow: xtls-rprx-vision"
+          echo "  Network: tcp"
+          echo "  Security: reality"
+          echo "  SNI: www.microsoft.com"
           echo ""
           echo "Connection will remain active until: $(date -d "+$DURATION minutes" 2>/dev/null || date -v +${DURATION}M)"
+          echo "================================"
           
           # Keep the workflow running
           SECONDS=$((DURATION * 60))
@@ -156,7 +249,10 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
+          echo "Stopping services..."
+          echo "Stopping Cloudflare Tunnel..."
+          pkill -f cloudflared || true
           echo "Stopping Xray..."
           pkill -f xray || true
-          echo "Cleanup completed"
+          echo "✅ Cleanup completed"
 
