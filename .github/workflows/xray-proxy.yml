@@ -157,94 +157,51 @@ jobs:
       - name: Start Cloudflare Tunnel
         run: |
           echo "Starting Cloudflare Tunnel..."
-          # Start cloudflared TCP tunnel in background and capture output
-          # Redirect both stdout and stderr to log file
-          cloudflared tunnel --url tcp://localhost:10186 > tunnel.log 2>&1 &
+          echo "Cloudflared will output the tunnel URL directly..."
+          echo ""
+          
+          # Start cloudflared TCP tunnel and capture output
+          # Use tee to both save and display output in real-time
+          cloudflared tunnel --url tcp://localhost:10186 2>&1 | tee tunnel.log &
           TUNNEL_PID=$!
           echo "Cloudflared started with PID: $TUNNEL_PID"
-          echo "Monitoring tunnel establishment..."
+          echo ""
           
-          # Wait for tunnel to establish and poll for URL
-          echo "Waiting for tunnel to establish..."
-          TUNNEL_URL=""
-          for i in {1..30}; do
-            sleep 2
-            # Try multiple extraction methods
-            # Method 1: Look for trycloudflare.com URLs
-            TUNNEL_URL=$(grep -oE 'tcp://[a-z0-9-]+\.trycloudflare\.com:[0-9]+' tunnel.log 2>/dev/null | grep -v localhost | head -1)
-            
-            # Method 2: Look for any tcp:// URL with trycloudflare
-            if [ -z "$TUNNEL_URL" ]; then
-              TUNNEL_URL=$(grep -iE 'trycloudflare' tunnel.log 2>/dev/null | grep -oE 'tcp://[^ ]+' | grep -v localhost | head -1)
-            fi
-            
-            # Method 3: Look in the box/banner output
-            if [ -z "$TUNNEL_URL" ]; then
-              TUNNEL_URL=$(grep -A 2 -B 2 'quick Tunnel' tunnel.log 2>/dev/null | grep -oE 'tcp://[a-z0-9-]+\.trycloudflare\.com:[0-9]+' | head -1)
-            fi
-            
-            if [ -n "$TUNNEL_URL" ]; then
-              echo "✅ Found tunnel URL after $((i * 2)) seconds"
-              echo "Raw extracted URL: $TUNNEL_URL"
-              # Show the matching line from log for verification
-              echo "Matching log line:"
-              grep -E 'trycloudflare' tunnel.log | grep -E 'tcp://' | head -1 || echo "Not found in log"
-              break
-            fi
-            
-            if [ $((i % 5)) -eq 0 ]; then
-              echo "Still waiting... ($((i * 2))s elapsed)"
-              echo "Recent log output:"
-              tail -5 tunnel.log || true
-            fi
-          done
+          # Wait a bit for tunnel to establish
+          echo "Waiting for tunnel to establish (checking output)..."
+          sleep 25
           
-          # Final check - show full log if still not found
+          # Show cloudflared output
+          echo ""
+          echo "=========================================="
+          echo "Cloudflared Output (from log):"
+          echo "=========================================="
+          cat tunnel.log
+          echo "=========================================="
+          echo ""
+          
+          # Try to extract URL - simple pattern matching
+          echo "Attempting to extract tunnel URL..."
+          TUNNEL_URL=$(grep -oE 'tcp://[a-z0-9-]+\.trycloudflare\.com:[0-9]+' tunnel.log 2>/dev/null | grep -v localhost | head -1)
+          
           if [ -z "$TUNNEL_URL" ]; then
-            echo "⚠️  Could not extract URL automatically. Showing full log:"
-            echo "=========================================="
-            cat tunnel.log
-            echo "=========================================="
+            echo "⚠️  Could not automatically extract URL from output above."
             echo ""
-            echo "Attempting manual extraction from log..."
-            # Try to find any URL pattern more aggressively
-            TUNNEL_URL=$(cat tunnel.log | grep -oE 'tcp://[a-zA-Z0-9.-]+\.trycloudflare\.com:[0-9]+' | grep -v localhost | head -1)
-            
-            if [ -z "$TUNNEL_URL" ]; then
-              echo "❌ Failed to extract tunnel URL. Please check the log above manually."
-              echo "Look for a line containing 'tcp://' and 'trycloudflare.com'"
-              exit 1
-            fi
-          fi
-          
-          # Clean up the URL (remove any trailing characters)
-          TUNNEL_URL=$(echo "$TUNNEL_URL" | sed 's/[^a-zA-Z0-9:.\/-]//g')
-          
-          echo "✅ Cloudflare Tunnel established"
-          echo "Public URL: $TUNNEL_URL"
-          
-          # Show relevant log lines for debugging
-          echo ""
-          echo "Relevant log lines containing tunnel info:"
-          grep -iE '(tcp://|trycloudflare|quick tunnel|tunnel created)' tunnel.log | head -10 || echo "No matching lines found"
-          echo ""
-          
-          # Extract host and port from tunnel URL (format: tcp://xxxx.trycloudflare.com:12345)
-          TUNNEL_HOST=$(echo $TUNNEL_URL | sed 's|tcp://||' | cut -d: -f1)
-          TUNNEL_PORT=$(echo $TUNNEL_URL | sed 's|tcp://||' | cut -d: -f2)
-          
-          # Validate extracted values
-          if [ -z "$TUNNEL_HOST" ] || [ -z "$TUNNEL_PORT" ] || [ "$TUNNEL_HOST" == "localhost" ]; then
-            echo "❌ Failed to parse tunnel URL correctly"
-            echo "Extracted URL: $TUNNEL_URL"
-            echo "Extracted Host: $TUNNEL_HOST"
-            echo "Extracted Port: $TUNNEL_PORT"
+            echo "Please manually find the tunnel URL in the output above."
+            echo "Look for a line like: tcp://xxxx.trycloudflare.com:xxxxx"
             echo ""
-            echo "Full tunnel log for debugging:"
-            echo "=========================================="
-            cat tunnel.log
-            echo "=========================================="
-            exit 1
+            echo "The tunnel is running in the background. You can check the log file or"
+            echo "manually extract the URL from the output shown above."
+            echo ""
+            echo "Setting placeholder values - please update manually:"
+            TUNNEL_HOST="YOUR_TUNNEL_HOST"
+            TUNNEL_PORT="YOUR_TUNNEL_PORT"
+            TUNNEL_URL="tcp://YOUR_TUNNEL_HOST:YOUR_TUNNEL_PORT"
+          else
+            echo "✅ Found tunnel URL: $TUNNEL_URL"
+            # Extract host and port
+            TUNNEL_HOST=$(echo "$TUNNEL_URL" | sed 's|tcp://||' | cut -d: -f1)
+            TUNNEL_PORT=$(echo "$TUNNEL_URL" | sed 's|tcp://||' | cut -d: -f2)
           fi
           
           echo "TUNNEL_HOST=$TUNNEL_HOST" >> $GITHUB_ENV
@@ -258,6 +215,9 @@ jobs:
           echo "Port: $TUNNEL_PORT"
           echo "Full URL: $TUNNEL_URL"
           echo "================================"
+          echo ""
+          echo "Note: If the URL shows placeholders, please check the Cloudflared Output above"
+          echo "and manually extract the tunnel URL (format: tcp://xxxx.trycloudflare.com:xxxxx)"
 
       - name: Keep Alive
         run: |
