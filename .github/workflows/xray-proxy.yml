@@ -1,0 +1,162 @@
+name: Xray Proxy Server
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'How long to keep the proxy running (in minutes)'
+        required: false
+        default: '30'
+
+jobs:
+  run-xray:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Xray
+        run: |
+          echo "Installing Xray..."
+          wget https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+          unzip Xray-linux-64.zip
+          chmod +x xray
+          ./xray version
+
+      - name: Create Xray config
+        run: |
+          cat > config.json << 'EOF'
+          {
+            "log": {
+              "loglevel": "warning"
+            },
+            "inbounds": [
+              {
+                "port": 10186,
+                "protocol": "vless",
+                "settings": {
+                  "clients": [
+                    {
+                      "id": "e4e6cef9-8308-44ff-9783-16441309096d",
+                      "flow": "xtls-rprx-vision"
+                    }
+                  ],
+                  "decryption": "none"
+                },
+                "streamSettings": {
+                  "network": "tcp",
+                  "security": "reality",
+                  "realitySettings": {
+                    "dest": "www.microsoft.com:443",
+                    "serverNames": ["www.microsoft.com"],
+                    "privateKey": "4G2f9-bVbRs4BYQM-lVMqugGgyl7pRlBe5P98TBvfUI",
+                    "shortIds": [""]
+                  }
+                },
+                "sniffing": {
+                  "enabled": true,
+                  "destOverride": ["http", "tls", "quic"]
+                }
+              }
+            ],
+            "outbounds": [
+              {
+                "protocol": "freedom",
+                "tag": "direct"
+              },
+              {
+                "protocol": "blackhole",
+                "tag": "block"
+              }
+            ]
+          }
+          EOF
+          echo "Xray configuration created"
+          cat config.json
+
+      - name: Get Server IP Information
+        run: |
+          echo "================================"
+          echo "Server IP Information:"
+          echo "================================"
+          echo "Public IPv4:"
+          curl -4 -s https://api.ipify.org || echo "Failed to get IPv4"
+          echo ""
+          echo "Public IPv6:"
+          curl -6 -s https://api.ipify.org || echo "No IPv6 available"
+          echo ""
+          echo "Detailed IP Info:"
+          curl -s https://ipinfo.io || echo "Failed to get detailed info"
+          echo ""
+          echo "================================"
+          echo "Xray Server Details:"
+          echo "================================"
+          echo "Protocol: VLESS"
+          echo "Port: 10186"
+          echo "UUID: e4e6cef9-8308-44ff-9783-16441309096d"
+          echo "Flow: xtls-rprx-vision"
+          echo "Network: tcp"
+          echo "Security: reality"
+          echo "SNI: www.microsoft.com"
+          echo "================================"
+
+      - name: Start Xray
+        run: |
+          echo "Starting Xray proxy server..."
+          ./xray run -config config.json &
+          XRAY_PID=$!
+          echo "Xray started with PID: $XRAY_PID"
+          
+          # Wait a moment for Xray to start
+          sleep 5
+          
+          # Check if Xray is running
+          if ps -p $XRAY_PID > /dev/null; then
+            echo "✅ Xray is running successfully on port 10186"
+          else
+            echo "❌ Xray failed to start"
+            exit 1
+          fi
+          
+          # Check if port is listening
+          if netstat -tuln | grep -q ":10186"; then
+            echo "✅ Port 10186 is listening"
+          else
+            echo "⚠️  Port 10186 might not be accessible"
+          fi
+
+      - name: Keep Alive
+        run: |
+          DURATION=${{ github.event.inputs.duration }}
+          if [ -z "$DURATION" ]; then
+            DURATION=30
+          fi
+          
+          echo "Keeping proxy alive for $DURATION minutes..."
+          echo "You can connect to the proxy at:"
+          PUBLIC_IP=$(curl -4 -s https://api.ipify.org)
+          echo "  Server: $PUBLIC_IP"
+          echo "  Port: 10186"
+          echo ""
+          echo "Connection will remain active until: $(date -d "+$DURATION minutes" 2>/dev/null || date -v +${DURATION}M)"
+          
+          # Keep the workflow running
+          SECONDS=$((DURATION * 60))
+          for ((i=1; i<=SECONDS; i++)); do
+            if [ $((i % 60)) -eq 0 ]; then
+              REMAINING=$((SECONDS - i))
+              echo "⏱️  Still running... $(($REMAINING / 60)) minutes remaining"
+            fi
+            sleep 1
+          done
+          
+          echo "✅ Proxy session completed"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Stopping Xray..."
+          pkill -f xray || true
+          echo "Cleanup completed"
+
